@@ -218,38 +218,24 @@
 </head>
 <body>
 
-<!-- API KEY SETUP -->
-<div id="api-setup">
-  <div class="setup-card">
-    <div class="setup-icon">📊</div>
-    <div class="setup-title">Welcome to StockSense Pro</div>
-    <div class="setup-sub">
-      Get your <strong>free Twelve Data key</strong> for US stocks — no credit card needed.<br>
-      Indian stocks (NSE/BSE) load automatically — no extra key required.
-    </div>
-    <div class="setup-steps">
-      <div class="setup-step"><div class="step-n">1</div><span>Click below → sign up with email on Twelve Data</span></div>
-      <div class="setup-step"><div class="step-n">2</div><span>Go to your dashboard → copy the API key</span></div>
-      <div class="setup-step"><div class="step-n">3</div><span>Paste it below and click <strong>Save &amp; Start</strong></span></div>
-    </div>
-    <a href="https://twelvedata.com/pricing" target="_blank" class="setup-link">🔑 Get Free API Key at TwelveData.com →</a>
-    <div class="key-row">
-      <input id="key-input" type="text" placeholder="Paste Twelve Data API key here…" autocomplete="off" spellcheck="false"/>
-      <button id="key-save">Save &amp; Start</button>
-    </div>
-    <div id="key-err">❌ Please enter a valid API key</div>
-
-    <div style="background:var(--bg2);border:1px solid var(--brd);border-radius:8px;padding:10px 14px;margin-top:12px">
-      <div style="font-size:12px;font-weight:600;color:var(--t2);margin-bottom:4px">🇮🇳 Optional: Alpha Vantage key for Indian stocks (backup)</div>
-      <div style="font-size:11px;color:var(--t3);margin-bottom:7px">Indian stocks work without this. Add it only if you see errors loading NSE/BSE stocks.</div>
-      <input id="av-input" type="text" placeholder="Paste Alpha Vantage key here (optional)…" autocomplete="off" spellcheck="false"
-        style="width:100%;background:var(--bg);border:1px solid var(--brd);border-radius:6px;padding:8px 12px;color:var(--t1);font-size:12px;outline:none;font-family:monospace"/>
-    </div>
-
-    <div class="setup-note" style="margin-top:10px">
-      <b>✅ 100% Free</b> &nbsp;·&nbsp; US: 800 stocks/day &nbsp;·&nbsp; Indian stocks: unlimited &nbsp;·&nbsp; Keys stored only on your device
-    </div>
+<!-- API KEY BANNER (replaces old overlay — no popup, no reload needed) -->
+<div id="keybar" style="background:#161b22;border-bottom:2px solid #58a6ff;padding:14px 20px;display:none;flex-direction:column;gap:10px;">
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <span style="font-size:13px;font-weight:600;color:#e6edf3;">🔑 Step 1: Get a free API key at</span>
+    <a href="https://twelvedata.com/pricing" target="_blank" style="color:#58a6ff;font-size:13px;font-weight:600;">twelvedata.com/pricing →</a>
+    <span style="font-size:12px;color:#8b949e;">(sign up free, no credit card)</span>
   </div>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <span style="font-size:13px;font-weight:600;color:#e6edf3;">Step 2: Paste key here:</span>
+    <input id="key-input" type="text" placeholder="e.g. 229df9c0e8354f1393c8d08ee64fd328" autocomplete="off" spellcheck="false"
+      style="flex:1;min-width:260px;max-width:400px;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px 12px;color:#e6edf3;font-size:13px;font-family:monospace;outline:none;"/>
+    <button id="key-save" style="background:#3fb950;color:#fff;border:none;border-radius:6px;padding:8px 18px;font-size:13px;font-weight:700;cursor:pointer;">
+      ✓ Save &amp; Start
+    </button>
+    <span id="key-err" style="color:#f85149;font-size:12px;display:none;">Please paste a valid key</span>
+  </div>
+  <!-- hidden av-input to keep JS references working -->
+  <input id="av-input" type="hidden" value=""/>
 </div>
 
 <!-- LOADING -->
@@ -391,35 +377,32 @@ _key   = tryLS(()=>localStorage.getItem(KEY_STORE))  || '';
 _avKey = tryLS(()=>localStorage.getItem(AV_STORE))   || '';
 
 function showSetup() {
-  document.getElementById('api-setup').classList.remove('hidden');
+  const bar = document.getElementById('keybar');
+  bar.style.display = 'flex';
   document.getElementById('key-input').value = getKey();
-  document.getElementById('av-input').value  = getAVKey();
+  document.getElementById('key-input').focus();
 }
 function hideSetup() {
-  const el = document.getElementById('api-setup');
-  el.classList.add('hidden');
-  el.style.display = 'none'; // force hide in case CSS class fails
+  document.getElementById('keybar').style.display = 'none';
 }
 
-document.getElementById('key-save').addEventListener('click', ()=>{
-  const k  = document.getElementById('key-input').value.trim();
-  const av = document.getElementById('av-input').value.trim();
+document.getElementById('key-save').addEventListener('click', function() {
+  const k   = document.getElementById('key-input').value.trim();
   const err = document.getElementById('key-err');
-  if (!k || k.length < 8) { err.style.display='block'; return; }
-  err.style.display='none';
+  if (!k || k.length < 8) { err.style.display = 'inline'; return; }
+  err.style.display = 'none';
   saveKey(k);
-  if (av.length >= 8) saveAVKey(av);
-  // Reload page — guaranteed to dismiss setup and show main screen
-  window.location.reload();
-});
-['key-input','av-input'].forEach(id=>{
-  document.getElementById(id).addEventListener('keydown', e=>{
-    if (e.key==='Enter') document.getElementById('key-save').click();
-  });
+  hideSetup();
+  // Show confirmation
+  document.getElementById('change-key').textContent = '✓ Key saved — Change Key';
 });
 
-// Show setup on load if no key saved
-if (!getKey()) showSetup();
+document.getElementById('key-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('key-save').click();
+});
+
+// Show key banner on load if no key saved, hide otherwise
+if (!getKey()) { showSetup(); } else { hideSetup(); }
 
 // ══════════════════════════════════════
 //  STATE
