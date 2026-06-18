@@ -233,7 +233,7 @@
     <input id="sin" type="text" placeholder="NVDA, AAPL, RELIANCE.NS, TCS.NS…" autocomplete="off" spellcheck="false"/>
     <button id="sbtn" onclick="go()">Analyze ↗</button>
   </div>
-  <div class="mhint">🇺🇸 AAPL TSLA NVDA &nbsp;|&nbsp; 🇮🇳 TCS.NS RELIANCE.NS &nbsp;|&nbsp; <span style="color:#3fb950">v7</span></div>
+  <div class="mhint">🇺🇸 AAPL TSLA NVDA &nbsp;|&nbsp; 🇮🇳 TCS.NS RELIANCE.NS &nbsp;|&nbsp; <span style="color:#3fb950">v8</span></div>
 </header>
 
 <!-- STOCK BAR -->
@@ -349,113 +349,102 @@ let MC=null;
 let cinit=false;
 
 // ══════════════════════════════════════
-//  DATA FETCHING — Stooq (free, no API key needed)
-//  US stocks:     AAPL → aapl.us
-//  Indian stocks: TCS.NS → tcs.ns  (Stooq uses same .ns/.bo format)
-//  Via CORS proxy so it works from any origin (GitHub Pages, local file, etc.)
+//  DATA FETCHING
+//  US stocks  → Twelve Data API (reliable, has CORS headers)
+//  Indian stocks → Yahoo Finance v8 direct (works from HTTPS origins)
 // ══════════════════════════════════════
 
-function toStooqSym(input) {
-  const s = input.toLowerCase().trim();
-  if (s.endsWith('.ns') || s.endsWith('.bo')) return s; // Indian: already correct
-  return s + '.us'; // US stocks: add .us suffix
-}
+const TD_KEY = '229df9c0e8354f1393c8d08ee64fd328'; // free Twelve Data key
 
 function rangeInDays(range) {
   return {'1mo':35,'3mo':95,'6mo':185,'1y':370,'2y':730,'5y':1825}[range]||185;
 }
 
-async function textFetch(url) {
+function rangeParams(range) {
+  return {
+    '1mo': {size:35,  iv:'1day'},
+    '3mo': {size:95,  iv:'1day'},
+    '6mo': {size:185, iv:'1day'},
+    '1y':  {size:370, iv:'1day'},
+    '2y':  {size:110, iv:'1week'},
+    '5y':  {size:265, iv:'1week'},
+  }[range] || {size:185, iv:'1day'};
+}
+
+async function apiFetch(url) {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(()=>ctrl.abort(), 15000);
-    const r = await fetch(url, {signal:ctrl.signal, cache:'no-store'});
+    const r = await fetch(url, {signal:ctrl.signal});
     clearTimeout(t);
     if (!r.ok) return null;
-    return await r.text();
+    return await r.json();
   } catch(e) { return null; }
 }
 
-function parseStooqCSV(text, sym, range) {
-  if (!text || text.length < 30) return null;
-  const lines = text.trim().split('\n');
-  if (lines.length < 2 || !lines[0].toLowerCase().includes('date')) return null;
-
-  // Stooq CSV: Date,Open,High,Low,Close,Volume (oldest first / ascending)
-  const allCandles = lines.slice(1).map(line => {
-    const p = line.split(',');
-    if (p.length < 5) return null;
-    const c = parseFloat(p[4]);
-    if (!p[0] || isNaN(c) || c <= 0) return null;
-    return {
-      time: p[0].trim(), open: parseFloat(p[1]), high: parseFloat(p[2]),
-      low: parseFloat(p[3]), close: c, volume: parseInt(p[5]) || 0,
-    };
+// ── Yahoo Finance parser (for Indian stocks) ──
+function parseYahoo(data, sym) {
+  const res = data?.chart?.result?.[0]; if (!res) return null;
+  const meta = res.meta || {}, q = res.indicators?.quote?.[0] || {};
+  const tArr = res.timestamp || [];
+  const rows = tArr.map((t,i) => {
+    if (q.close?.[i]==null) return null;
+    const c = +q.close[i];
+    return { datetime: new Date(t*1000).toISOString().slice(0,10),
+      open:String(+(q.open?.[i]??c).toFixed(4)), high:String(+(q.high?.[i]??c).toFixed(4)),
+      low:String(+(q.low?.[i]??c).toFixed(4)),   close:String(c.toFixed(4)),
+      volume:String(q.volume?.[i]??0) };
   }).filter(Boolean);
-
-  if (allCandles.length < 5) return null;
-
-  const days = rangeInDays(range);
-  const candles = allCandles.slice(-days);
-
-  const isIndian = /\.(ns|bo)$/i.test(sym);
-  const base = sym.replace(/\.(NS|BO|ns|bo)$/i, '').toUpperCase();
-  const exch = isIndian ? (sym.toLowerCase().endsWith('.bo') ? 'BSE' : 'NSE') : 'US Market';
-  const cur  = isIndian ? 'INR' : 'USD';
-
-  const last = candles.at(-1), prev = candles.at(-2);
-  const lc = last.close, pc = prev?.close ?? lc;
-  const highs = candles.slice(-252).map(c=>c.high);
-  const lows  = candles.slice(-252).map(c=>c.low);
-  const avgV  = Math.round(candles.slice(-60).reduce((s,c)=>s+c.volume,0)/Math.min(60,candles.length));
-
-  const valuesDesc = [...candles].reverse().map(c=>({
-    datetime:c.time, open:String(c.open), high:String(c.high),
-    low:String(c.low), close:String(c.close), volume:String(c.volume),
-  }));
-
+  if (rows.length < 5) return null;
+  const exch = sym.toUpperCase().endsWith('.BO') ? 'BSE' : 'NSE';
+  const cur  = meta.currency || 'INR';
+  const lc   = meta.regularMarketPrice ?? +rows.at(-1).close;
+  const pc   = meta.chartPreviousClose ?? +rows.at(-2)?.close ?? lc;
   return {
-    ts: { values: valuesDesc, meta: { symbol: base, currency: cur, exchange: exch } },
-    qt: {
-      symbol: base, name: base, exchange: exch, currency: cur,
-      close: String(lc), change: String(+(lc-pc).toFixed(2)),
+    ts: { values: [...rows].reverse(), meta: { symbol: sym.replace(/\.(NS|BO)$/i,''), currency: cur, exchange: exch } },
+    qt: { symbol: sym.replace(/\.(NS|BO)$/i,''), name: meta.longName||meta.shortName||sym,
+      exchange: exch, currency: cur, close: String(lc), change: String(+(lc-pc).toFixed(2)),
       percent_change: String(+((lc-pc)/pc*100).toFixed(4)),
-      volume: String(last.volume), open: String(last.open),
-      average_volume: String(avgV),
+      volume: String(meta.regularMarketVolume??0), open: String(meta.regularMarketOpen??rows.at(-1).open),
+      average_volume: String(meta.regularMarketVolume??0),
       fifty_two_week: {
-        high: String(Math.max(...highs).toFixed(2)),
-        low:  String(Math.min(...lows).toFixed(2)),
-      },
-    },
+        high: String(meta['52WeekHigh'] ?? Math.max(...rows.map(r=>+r.high)).toFixed(2)),
+        low:  String(meta['52WeekLow']  ?? Math.min(...rows.map(r=>+r.low)).toFixed(2)),
+      }},
     sym,
   };
 }
 
 async function fetchData(sym, range) {
-  const stooqSym = toStooqSym(sym);
-  const stooqUrl = `https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqSym)}&i=d`;
+  const isIndian = /\.(NS|BO)$/i.test(sym);
 
-  const proxies = [
-    `https://corsproxy.io/?${encodeURIComponent(stooqUrl)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(stooqUrl)}`,
-  ];
-
-  for (let i = 0; i < proxies.length; i++) {
-    setLoading(`Loading ${sym}… (source ${i+1})`);
-    let text = await textFetch(proxies[i]);
-    if (!text) continue;
-    // allorigins wraps in JSON {contents:'...'}
-    try { const j=JSON.parse(text); if(j?.contents) text=j.contents; } catch(e){}
-    const result = parseStooqCSV(text, sym, range);
-    if (result) return result;
+  if (isIndian) {
+    // Yahoo Finance v8 — works directly from HTTPS origins (GitHub Pages)
+    const {iv, size} = {iv: range==='2y'||range==='5y'?'1wk':'1d', size: rangeInDays(range)};
+    const rng = {'1mo':'1mo','3mo':'3mo','6mo':'6mo','1y':'1y','2y':'2y','5y':'5y'}[range]||'6mo';
+    const urls = [
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${rng}&interval=${iv}&includePrePost=false`,
+      `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${rng}&interval=${iv}&includePrePost=false`,
+    ];
+    for (const url of urls) {
+      setLoading(`Loading ${sym}…`);
+      const data = await apiFetch(url);
+      const result = parseYahoo(data, sym);
+      if (result) return result;
+    }
+    throw new Error(`Could not load "${sym}". Try: TCS.NS  RELIANCE.NS  INFY.NS  HDFCBANK.NS  ICICIBANK.NS`);
   }
 
-  throw new Error(
-    `Could not load "${sym}".\n` +
-    `• US stocks: AAPL  TSLA  NVDA  MSFT  AMZN\n` +
-    `• Indian stocks: TCS.NS  RELIANCE.NS  INFY.NS  HDFCBANK.NS\n` +
-    `• Check spelling and try again`
-  );
+  // US stocks → Twelve Data
+  const {size, iv} = rangeParams(range);
+  setLoading(`Loading ${sym}…`);
+  const [ts, qt] = await Promise.all([
+    apiFetch(`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=${iv}&outputsize=${size}&apikey=${TD_KEY}`),
+    apiFetch(`https://api.twelvedata.com/quote?symbol=${encodeURIComponent(sym)}&apikey=${TD_KEY}`),
+  ]);
+  if (ts?.code===429) throw new Error('Rate limit reached (800 free calls/day). Try again after midnight UTC.');
+  if (!ts?.values) throw new Error(ts?.message || `No data for "${sym}". Try: AAPL  TSLA  NVDA  MSFT  AMZN  SPY`);
+  return {ts, qt, sym};
 }
 
 function parseData({ts, qt, sym}) {
