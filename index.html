@@ -850,4 +850,134 @@ function renderPanel(lvls,fib,a){
 
   const cp=S.candles.at(-1).close;
   document.getElementById('stb').innerHTML=lvls.support.slice(0,5).map((l,i)=>`<tr><td>S${i+1}</td><td class="lvs">${fmt(l.price)}</td><td><div class="dots">${dots(l.t)}</div></td><td style="color:var(--t3)">${((cp-l.price)/cp*100).toFixed(1)}%</td></tr>`).join('')||'<tr><td colspan="4" style="color:var(--t3);padding:5px 0">None detected in this range</td></tr>';
-  document.getElementById('rtb').innerHTML=lvls.resistance
+  document.getElementById('rtb').innerHTML=lvls.resistance.slice(0,5).map((l,i)=>`<tr><td>R${i+1}</td><td class="lvr">${fmt(l.price)}</td><td><div class="dots">${dots(l.t)}</div></td><td style="color:var(--t3)">${((l.price-cp)/cp*100).toFixed(1)}%</td></tr>`).join('')||'<tr><td colspan="4" style="color:var(--t3);padding:5px 0">None detected in this range</td></tr>';
+
+  const fc=document.getElementById('fibcard');
+  if(fib&&S.fib_){
+    fc.style.display='block';
+    document.getElementById('fibb').innerHTML=fib.levels.map(l=>{
+      const away=((l.price-cp)/cp*100).toFixed(1);
+      const tag=l.price>cp?'r':'s';
+      return`<div class="frow"><span class="fl">${l.name}</span><span class="fp">${fmt(l.price)}</span><span class="ft ${tag}">${away>0?'+':''}${away}%</span></div>`;
+    }).join('');
+  } else fc.style.display='none';
+}
+
+// ══════════════════════════════════════
+//  LOADING HELPERS
+// ══════════════════════════════════════
+function setLoading(msg){
+  document.getElementById('loading').classList.add('vis');
+  document.getElementById('ldtxt').textContent=msg||'Loading…';
+}
+function clearLoading(){ document.getElementById('loading').classList.remove('vis'); }
+
+// ══════════════════════════════════════
+//  RENDER HEADER (stock bar)
+// ══════════════════════════════════════
+function renderHeader(meta){
+  document.getElementById('sbar').classList.add('vis');
+  const {symbol,name,exchange,cur,price,chg,chgPct,volume,open,h52,l52,avgV}=meta;
+  S.cur=cur;
+  document.getElementById('ssym').textContent=symbol;
+  document.getElementById('sname').textContent=name!==symbol?name:'';
+  document.getElementById('sexch').textContent=exchange;
+  document.getElementById('sprice').textContent=fmt(price,cur);
+  const ce=document.getElementById('schg');
+  const sign=chg>=0?'+':'';
+  ce.textContent=`${sign}${fmt(chg,cur)} (${sign}${chgPct.toFixed?chgPct.toFixed(2):chgPct}%)`;
+  ce.className=chg>=0?'p':'n';
+  document.getElementById('sv').textContent=fmtN(volume);
+  document.getElementById('s52h').textContent=fmt(h52,cur);
+  document.getElementById('s52l').textContent=fmt(l52,cur);
+  document.getElementById('savgv').textContent=fmtN(avgV);
+  document.getElementById('sopen').textContent=fmt(open,cur);
+}
+
+// ══════════════════════════════════════
+//  TOGGLE INDICATORS
+// ══════════════════════════════════════
+function tog(id){
+  const btn=document.getElementById('b'+id);
+  switch(id){
+    case 'ma':   S.ma   =!S.ma;   break;
+    case 'sr':   S.sr   =!S.sr;   break;
+    case 'fib':  S.fib_ =!S.fib_; break;
+    case 'vol':  S.vol  =!S.vol;  break;
+    case 'rsi':  S.rsi_ =!S.rsi_; break;
+    case 'macd': S.macd_=!S.macd_;break;
+  }
+  btn?.classList.toggle('a');
+  if(S.candles.length){
+    const a=analyse(S.candles,S.ind,S.lvls);
+    renderChart(S.candles,S.ind,S.lvls,S.fib,a);
+    if(id==='fib')renderPanel(S.lvls,S.fib,a);
+  }
+}
+
+// ══════════════════════════════════════
+//  MAIN GO() — search & render
+// ══════════════════════════════════════
+async function go(symArg){
+  const sym=(symArg||document.getElementById('sin').value).trim().toUpperCase();
+  if(!sym)return;
+  document.getElementById('sin').value=sym;
+  S.sym=sym;
+
+  document.getElementById('welcome').style.display='none';
+  document.getElementById('errbox').classList.remove('vis');
+  document.getElementById('sbtn').disabled=true;
+
+  try{
+    setLoading(`Loading ${sym}…`);
+    const raw=await fetchData(sym,S.range);
+    const {candles,meta}=parseData(raw);
+    S.candles=candles; S.cur=meta.cur;
+
+    const closes=candles.map(c=>c.close);
+    S.ind={
+      e20:  ema(closes,20),
+      e50:  ema(closes,50),
+      s200: sma(closes,200),
+      rsi:  rsi(closes),
+      macd: macd(closes),
+    };
+    S.lvls=findSR(candles);
+    S.fib=fibCalc(candles);
+
+    const a=analyse(candles,S.ind,S.lvls);
+
+    document.getElementById('csect').classList.add('vis');
+    document.getElementById('apanel').classList.add('vis');
+    if(!cinit)initCharts();
+
+    renderHeader(meta);
+    renderChart(candles,S.ind,S.lvls,S.fib,a);
+    renderPanel(S.lvls,S.fib,a);
+  }catch(err){
+    const eb=document.getElementById('errbox');
+    document.getElementById('errtxt').textContent=err.message;
+    eb.classList.add('vis');
+  }finally{
+    clearLoading();
+    document.getElementById('sbtn').disabled=false;
+  }
+}
+
+// ══════════════════════════════════════
+//  WIRE UP BUTTONS
+// ══════════════════════════════════════
+document.getElementById('sbtn').addEventListener('click',()=>go());
+document.getElementById('sin').addEventListener('keydown',e=>{if(e.key==='Enter')go();});
+
+document.querySelectorAll('.tf').forEach(btn=>{
+  btn.addEventListener('click',function(){
+    document.querySelectorAll('.tf').forEach(b=>b.classList.remove('a'));
+    this.classList.add('a');
+    S.range=this.dataset.r;
+    if(S.sym)go(S.sym);
+  });
+});
+</script>
+</body>
+</html>
